@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeetingMind — Upload Video</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>MeetingMind</h1>
+      <p class="tagline">Video Meeting Analyzer</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="upload-section">
+      <h2>Upload Meeting Recording</h2>
+      <p class="subtitle">Supported formats: MP4, MKV, MOV, WEBM, MP3 (max 500 MB, up to 120 minutes)</p>
+      
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-zone-content">
+          <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+          </svg>
+          <p>Drag & drop video or audio file here</p>
+          <button class="btn btn-primary" id="browseBtn">Browse Files</button>
+        </div>
+        <input type="file" id="fileInput" accept="video/mp4,video/x-matroska,video/quicktime,video/webm,audio/mpeg,audio/mp3" hidden>
+      </div>
+
+      <div class="upload-preview" id="uploadPreview" style="display: none;">
+        <div class="preview-info">
+          <p class="filename" id="filename"></p>
+          <p class="filesize" id="filesize"></p>
+        </div>
+        <div class="preview-status">
+          <div class="spinner"></div>
+          <p id="statusText">Uploading...</p>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+
+      <div class="upload-error" id="uploadError" style="display: none;">
+        <p id="errorMessage"></p>
+        <button class="btn" onclick="resetUpload()">Try Again</button>
+      </div>
+    </section>
+
+    <section class="features-section">
+      <h3>How it works</h3>
+      <div class="features-grid">
+        <div class="feature">
+          <span class="feature-number">1</span>
+          <h4>Upload</h4>
+          <p>Upload your video recording (MP4, MKV, MOV, WEBM up to 500 MB)</p>
+        </div>
+        <div class="feature">
+          <span class="feature-number">2</span>
+          <h4>Transcribe</h4>
+          <p>AI-powered transcription with speaker detection and timestamps</p>
+        </div>
+        <div class="feature">
+          <span class="feature-number">3</span>
+          <h4>Summarize</h4>
+          <p>Generate structured summaries with action items and decisions</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Powered by Qwen3-ASR + Qwen3.6 | Hosted on Render</p>
+  </footer>
+
+  <script type="module">
+    import { uploadFile } from '/static/api/client.js';
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const browseBtn = document.getElementById('browseBtn');
+    const uploadPreview = document.getElementById('uploadPreview');
+    const uploadError = document.getElementById('uploadError');
+    const filename = document.getElementById('filename');
+    const filesize = document.getElementById('filesize');
+    const statusText = document.getElementById('statusText');
+    const progressFill = document.getElementById('progressFill');
+    const errorMessage = document.getElementById('errorMessage');
+
+    let selectedFile = null;
+
+    browseBtn.addEventListener('click', () => fileInput.click());
+    
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    async function handleFile(file) {
+      const maxSize = 500 * 1024 * 1024;
+      if (file.size > maxSize) {
+        showError('File too large. Maximum size is 500 MB.');
+        return;
+      }
+
+      const validTypes = ['video/mp4', 'video/x-matroska', 'video/quicktime', 'video/webm'];
+      if (!validTypes.includes(file.type)) {
+        showError('Invalid file type. Please upload MP4, MKV, MOV, or WEBM.');
+        return;
+      }
+
+      selectedFile = file;
+      showPreview(file);
+
+      try {
+        statusText.textContent = 'Uploading...';
+        const data = await uploadFile(file);
+        statusText.textContent = 'Upload complete!';
+        progressFill.style.width = '100%';
+        
+        // Store job_id and redirect
+        sessionStorage.setItem('jobId', data.job_id);
+        sessionStorage.setItem('filename', data.filename);
+        
+        setTimeout(() => {
+          window.location.href = '/pages/status.html';
+        }, 500);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function showPreview(file) {
+      dropZone.style.display = 'none';
+      uploadError.style.display = 'none';
+      uploadPreview.style.display = 'flex';
+      
+      filename.textContent = file.name;
+      filesize.textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB`;
+      statusText.textContent = 'Uploading...';
+      progressFill.style.width = '0%';
+    }
+
+    function showError(message) {
+      dropZone.style.display = 'none';
+      uploadPreview.style.display = 'none';
+      uploadError.style.display = 'flex';
+      errorMessage.textContent = message;
+    }
+
+    window.resetUpload = function() {
+      selectedFile = null;
+      fileInput.value = '';
+      dropZone.style.display = 'flex';
+      uploadPreview.style.display = 'none';
+      uploadError.style.display = 'none';
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeetingMind — Transcript</title>
+  <link rel="stylesheet" href="/styles/main.css">
+  <style>
+    @media print {
+      body { background: white; }
+      .no-print { display: none !important; }
+      .transcript-section { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
+      .transcript-content {
+        max-height: none !important;
+        overflow: visible !important;
+        border: none !important;
+        background: white !important;
+        padding: 0 !important;
+      }
+      .sentence {
+        break-inside: avoid;
+        border-left: 3px solid !important;
+        margin-bottom: 0.5rem !important;
+      }
+      .speaker-select { display: none; }
+      .speaker-legend { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container header-flex">
+      <div>
+        <h1>MeetingMind</h1>
+        <p class="tagline">Video Meeting Analyzer</p>
+      </div>
+      <div class="job-info">
+        <span id="filename"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="transcript-section">
+      <div class="section-header">
+        <h2>Transcript</h2>
+        <div class="transcript-controls no-print">
+          <input type="text" id="searchInput" placeholder="Search transcript..." class="search-input">
+          <button class="btn btn-small" id="autoScrollBtn">Auto-scroll: OFF</button>
+          <button class="btn btn-small" id="printBtn">Print PDF</button>
+        </div>
+      </div>
+
+      <div class="speaker-manager no-print">
+        <h3>Speakers</h3>
+        <div class="speaker-list" id="speakerList"></div>
+        <div class="add-speaker-form">
+          <input type="text" id="newSpeakerName" placeholder="Name (≤10 chars)" maxlength="10">
+          <button class="btn btn-small" id="addSpeakerBtn">Add Speaker</button>
+        </div>
+      </div>
+
+      <div class="speaker-legend" id="speakerLegend"></div>
+
+      <div class="transcript-content" id="transcriptContent">
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <p>Loading transcript...</p>
+        </div>
+      </div>
+
+      <div class="token-info no-print">
+        <p>Transcription tokens: <span id="tokenCount">—</span> (proxy estimate)</p>
+      </div>
+
+      <div class="action-buttons no-print">
+        <button class="btn" id="downloadTranscriptBtn">Download Transcript</button>
+        <button class="btn btn-primary" id="toSummaryBtn">Generate Summary →</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Powered by Qwen3-ASR + Qwen3.6 | Hosted on Render</p>
+  </footer>
+
+  <script type="module">
+    import { getTranscript } from '/static/api/client.js';
+
+    const jobId = sessionStorage.getItem('jobId');
+    const filename = sessionStorage.getItem('filename');
+
+    if (!jobId) {
+      window.location.href = '/pages/index.html';
+    }
+
+    document.getElementById('filename').textContent = filename || '';
+
+    const SPEAKER_COLORS = [
+      '#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA',
+      '#00ACC1', '#6D4C41', '#546E7A', '#D81B60', '#3949AB'
+    ];
+    let sentences = [];
+    let speakers = [];
+    let autoScroll = false;
+    let transcriptData = null;
+
+    const transcriptContent = document.getElementById('transcriptContent');
+    const speakerLegend = document.getElementById('speakerLegend');
+    const speakerList = document.getElementById('speakerList');
+    const tokenCount = document.getElementById('tokenCount');
+    const searchInput = document.getElementById('searchInput');
+    const autoScrollBtn = document.getElementById('autoScrollBtn');
+    const toSummaryBtn = document.getElementById('toSummaryBtn');
+
+    function formatTime(ms) {
+      const mins = Math.floor(ms / 60000);
+      const secs = Math.floor((ms % 60000) / 1000);
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    function addSpeaker(name) {
+      if (!name.trim()) return;
+      if (speakers.length >= 10) {
+        alert('Maximum 10 speakers');
+        return;
+      }
+      const speaker = {
+        id: speakers.length,
+        name: name.trim().substring(0, 10),
+        color: SPEAKER_COLORS[speakers.length % SPEAKER_COLORS.length]
+      };
+      speakers.push(speaker);
+      renderSpeakers();
+    }
+
+    function renderSpeakers() {
+      speakerList.innerHTML = '';
+      speakers.forEach((speaker, index) => {
+        const div = document.createElement('div');
+        div.className = 'speaker-item';
+        div.innerHTML = `
+          <span class="speaker-color" style="background: ${speaker.color}"></span>
+          <input type="text" value="${speaker.name}" maxlength="10" 
+                 class="speaker-name-input" data-index="${index}">
+          <button class="btn btn-small remove-speaker-btn" data-index="${index}">×</button>
+        `;
+        speakerList.appendChild(div);
+      });
+      renderLegend();
+      renderTranscript(sentences);
+    }
+
+    function renderLegend() {
+      speakerLegend.innerHTML = '';
+      speakers.forEach((speaker, index) => {
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        item.innerHTML = `
+          <span class="legend-color" style="background: ${speaker.color}"></span>
+          <span>${speaker.name}</span>
+        `;
+        speakerLegend.appendChild(item);
+      });
+    }
+
+    function renderTranscript(sents) {
+      transcriptContent.innerHTML = '';
+
+      sents.forEach(sentence => {
+        const speaker = speakers.find(s => s.id === sentence.speakerId) || speakers[0];
+        const div = document.createElement('div');
+        div.className = 'sentence';
+        div.dataset.id = sentence.id;
+        div.style.borderLeft = `4px solid ${speaker.color}`;
+        div.style.background = speaker.color + '18';
+
+        div.innerHTML = `
+          <span class="sentence-time">[${formatTime(sentence.begin_time_ms)}]</span>
+          <div class="sentence-meta">
+            <span class="lang-badge ${sentence.language}">${sentence.language.toUpperCase()}</span>
+            <span class="emotion-badge ${sentence.emotion}">${sentence.emotion}</span>
+            <select class="speaker-select" data-sentence-id="${sentence.id}">
+              ${speakers.map(s => `
+                <option value="${s.id}" ${s.id === sentence.speakerId ? 'selected' : ''} 
+                        style="color: ${s.color}">${s.name}</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="sentence-text">${sentence.text}</div>
+          <span class="sentence-duration">+${(sentence.duration_ms / 1000).toFixed(1)}s</span>
+        `;
+
+        transcriptContent.appendChild(div);
+      });
+    }
+
+    function filterTranscript(query) {
+      const sentenceEls = transcriptContent.querySelectorAll('.sentence');
+      
+      sentenceEls.forEach(el => {
+        const text = el.querySelector('.sentence-text').textContent.toLowerCase();
+        if (query === '' || text.includes(query.toLowerCase())) {
+          el.style.display = 'flex';
+          if (query !== '') {
+            const textEl = el.querySelector('.sentence-text');
+            const regex = new RegExp(`(${query})`, 'gi');
+            textEl.innerHTML = textEl.textContent.replace(regex, '<mark>$1</mark>');
+          } else {
+            const textEl = el.querySelector('.sentence-text');
+            textEl.innerHTML = textEl.textContent;
+          }
+        } else {
+          el.style.display = 'none';
+        }
+      });
+    }
+
+    async function loadTranscript() {
+      const cached = sessionStorage.getItem('transcriptData');
+      if (cached) {
+        const data = JSON.parse(cached);
+        transcriptData = data;
+        sentences = data.sentences.map(s => ({ ...s, speakerId: 0 }));
+        if (speakers.length === 0) {
+          addSpeaker('Speaker A');
+          addSpeaker('Speaker B');
+        }
+        tokenCount.textContent = data.token_usage?.transcription_proxy_tokens?.toLocaleString() || '—';
+        renderSpeakers();
+        return;
+      }
+
+      try {
+        const data = await getTranscript(jobId);
+        transcriptData = data;
+        sentences = data.sentences.map(s => ({ ...s, speakerId: 0 }));
+        
+        sessionStorage.setItem('transcriptData', JSON.stringify(data));
+        
+        tokenCount.textContent = data.token_usage?.transcription_proxy_tokens?.toLocaleString() || '—';
+        
+        if (speakers.length === 0) {
+          addSpeaker('Speaker A');
+          addSpeaker('Speaker B');
+        }
+        renderSpeakers();
+      } catch (error) {
+        transcriptContent.innerHTML = `
+          <div class="error-state">
+            <p>Error loading transcript: ${error.message}</p>
+            <button class="btn" onclick="location.reload()">Retry</button>
+          </div>
+        `;
+      }
+    }
+
+    speakerList.addEventListener('input', (e) => {
+      if (e.target.classList.contains('speaker-name-input')) {
+        const index = parseInt(e.target.dataset.index);
+        speakers[index].name = e.target.value.substring(0, 10);
+        renderLegend();
+      }
+    });
+
+    speakerList.addEventListener('click', (e) => {
+      if (e.target.classList.contains('remove-speaker-btn')) {
+        const index = parseInt(e.target.dataset.index);
+        if (speakers.length <= 1) {
+          alert('Need at least one speaker');
+          return;
+        }
+        const removedId = speakers[index].id;
+        speakers.splice(index, 1);
+        sentences.forEach(s => {
+          if (s.speakerId === removedId) s.speakerId = speakers[0].id;
+          else if (s.speakerId > removedId) s.speakerId--;
+        });
+        speakers.forEach((s, i) => s.id = i);
+        renderSpeakers();
+      }
+    });
+
+    transcriptContent.addEventListener('change', (e) => {
+      if (e.target.classList.contains('speaker-select')) {
+        const sentenceId = parseInt(e.target.dataset.sentenceId);
+        const newSpeakerId = parseInt(e.target.value);
+        const sentence = sentences.find(s => s.id === sentenceId);
+        if (sentence) {
+          sentence.speakerId = newSpeakerId;
+          const row = e.target.closest('.sentence');
+          const speaker = speakers.find(s => s.id === newSpeakerId);
+          if (speaker) {
+            row.style.borderLeft = `4px solid ${speaker.color}`;
+            row.style.background = speaker.color + '18';
+          }
+        }
+      }
+    });
+
+    searchInput.addEventListener('input', (e) => {
+      filterTranscript(e.target.value);
+    });
+
+    autoScrollBtn.addEventListener('click', () => {
+      autoScroll = !autoScroll;
+      autoScrollBtn.textContent = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+      if (autoScroll) {
+        transcriptContent.scrollTop = transcriptContent.scrollHeight;
+      }
+    });
+
+    transcriptContent.addEventListener('scroll', () => {
+      if (autoScroll) {
+        const isAtBottom = transcriptContent.scrollHeight - transcriptContent.scrollTop <= transcriptContent.clientHeight + 50;
+        if (!isAtBottom) {
+          autoScroll = false;
+          autoScrollBtn.textContent = `Auto-scroll: OFF`;
+        }
+      }
+    });
+
+    document.getElementById('printBtn').addEventListener('click', () => {
+      window.print();
+    });
+
+    document.getElementById('addSpeakerBtn').addEventListener('click', () => {
+      const input = document.getElementById('newSpeakerName');
+      addSpeaker(input.value);
+      input.value = '';
+    });
+
+    document.getElementById('newSpeakerName').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        addSpeaker(e.target.value);
+        e.target.value = '';
+      }
+    });
+
+    toSummaryBtn.addEventListener('click', () => {
+      window.location.href = '/pages/summary.html';
+    });
+
+    const downloadTranscriptBtn = document.getElementById('downloadTranscriptBtn');
+    downloadTranscriptBtn.addEventListener('click', () => {
+      if (!transcriptData) return;
+      
+      const data = {
+        job_id: jobId,
+        filename: filename,
+        audio_duration_seconds: transcriptData.audio_duration_seconds,
+        language: transcriptData.language,
+        speakers: speakers,
+        sentences: sentences
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transcript_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    loadTranscript();
+  </script>
+</body>
+</html>

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeetingMind — Transcription</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header>
+    <div class="container header-flex">
+      <div>
+        <h1>MeetingMind</h1>
+        <p class="tagline">Video Meeting Analyzer</p>
+      </div>
+      <div class="job-info">
+        <span id="filename"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="status-section">
+      <h2 id="statusTitle">Transcribing...</h2>
+      
+      <div class="step-indicator">
+        <div class="step" id="step1">
+          <div class="step-circle">1</div>
+          <div class="step-label">Upload</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step active" id="step2">
+          <div class="step-circle">2</div>
+          <div class="step-label">Transcribe</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" id="step3">
+          <div class="step-circle">3</div>
+          <div class="step-label">Summarize</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" id="step4">
+          <div class="step-circle">4</div>
+          <div class="step-label">Complete</div>
+        </div>
+      </div>
+
+      <div class="status-card" id="statusCard">
+        <div class="status-icon">
+          <div class="spinner large"></div>
+        </div>
+        <p class="status-message" id="statusMessage">Processing your video...</p>
+        <p class="status-detail" id="statusDetail">This may take several minutes for long recordings.</p>
+      </div>
+
+      <div class="log-console">
+        <div class="log-header">
+          <span>Live Log</span>
+          <button class="btn-small" id="toggleLog">Toggle</button>
+        </div>
+        <div class="log-content" id="logContent"></div>
+      </div>
+
+      <div class="action-buttons">
+        <button class="btn btn-secondary" id="cancelBtn">Cancel</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Powered by Qwen3-ASR + Qwen3.6 | Hosted on Render</p>
+  </footer>
+
+  <script type="module">
+    import { getStatus, deleteJob } from '/static/api/client.js';
+
+    const jobId = sessionStorage.getItem('jobId');
+    const filename = sessionStorage.getItem('filename');
+
+    if (!jobId) {
+window.location.href = '/pages/index.html';
+    }
+
+    document.getElementById('filename').textContent = filename || '';
+
+    const statusMessage = document.getElementById('statusMessage');
+    const statusDetail = document.getElementById('statusDetail');
+    const logContent = document.getElementById('logContent');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const toggleLogBtn = document.getElementById('toggleLog');
+
+    let pollingInterval = null;
+    let currentStep = 2;
+
+    function updateStep(step) {
+      const steps = ['step1', 'step2', 'step3', 'step4'];
+      steps.forEach((s, i) => {
+        const el = document.getElementById(s);
+        el.classList.remove('active', 'completed');
+        if (i + 1 < step) {
+          el.classList.add('completed');
+        } else if (i + 1 === step) {
+          el.classList.add('active');
+        }
+      });
+      currentStep = step;
+    }
+
+    function addLog(message) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logContent.appendChild(entry);
+      logContent.scrollTop = logContent.scrollHeight;
+    }
+
+    async function pollStatus() {
+      try {
+        const data = await getStatus(jobId);
+        
+        // Add new logs
+        if (data.log && data.log.length > 0) {
+          data.log.forEach(msg => addLog(msg));
+        }
+
+        if (data.status === 'transcribing') {
+          statusMessage.textContent = 'Transcribing audio...';
+          statusDetail.textContent = 'Qwen3-ASR is processing your recording.';
+          updateStep(2);
+        } else if (data.status === 'complete') {
+          statusDetail.textContent = 'Transcription complete!';
+          updateStep(3);
+          clearInterval(pollingInterval);
+          
+          // Redirect to transcript page
+          setTimeout(() => {
+            window.location.href = '/pages/transcript.html';
+          }, 1000);
+        } else if (data.status === 'error') {
+          statusMessage.textContent = 'Error occurred';
+          statusDetail.textContent = data.error_message || 'Unknown error';
+          statusDetail.style.color = '#EF4444';
+          clearInterval(pollingInterval);
+        } else if (data.status === 'queued') {
+          statusMessage.textContent = 'Waiting in queue...';
+          statusDetail.textContent = 'Your video is being prepared.';
+          updateStep(1);
+        }
+      } catch (error) {
+        addLog(`Error: ${error.message}`);
+      }
+    }
+
+    cancelBtn.addEventListener('click', async () => {
+      if (confirm('Are you sure you want to cancel this job?')) {
+        try {
+          await deleteJob(jobId);
+          sessionStorage.removeItem('jobId');
+          sessionStorage.removeItem('filename');
+window.location.href = '/pages/index.html';
+        } catch (error) {
+          addLog(`Cancel error: ${error.message}`);
+        }
+      }
+    });
+
+    toggleLogBtn.addEventListener('click', () => {
+      logContent.style.display = logContent.style.display === 'none' ? 'block' : 'none';
+    });
+
+    // Start polling
+    pollStatus();
+    pollingInterval = setInterval(pollStatus, 3000);
+  </script>
+</body>
+</html>

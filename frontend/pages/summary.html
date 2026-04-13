@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeetingMind — Summary</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header>
+    <div class="container header-flex">
+      <div>
+        <h1>MeetingMind</h1>
+        <p class="tagline">Video Meeting Analyzer</p>
+      </div>
+      <div class="job-info">
+        <a href="/pages/transcript.html" class="btn btn-small">← Back to Transcript</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="summary-section">
+      <div class="section-header">
+        <h2>Meeting Summary</h2>
+        <div class="summary-actions">
+          <button class="btn btn-small" id="downloadBtn">Download .md</button>
+          <button class="btn btn-small" id="copyBtn">Copy Markdown</button>
+        </div>
+      </div>
+
+      <div class="context-panel">
+        <h3>Modify Summary</h3>
+        <p class="context-hint" id="modificationHint">Enter instructions to modify the summary (e.g., "Make it shorter", "Focus on action items")</p>
+        <textarea id="contextText" rows="3" placeholder="e.g., Make it shorter, focus on action items, write in Thai..."></textarea>
+        <div class="modification-counter" id="modificationCounter">
+          <span id="remainingCount">3</span> modifications remaining
+        </div>
+      </div>
+
+      <div class="generate-panel" id="generatePanel">
+        <button class="btn btn-primary btn-large" id="generateBtn">
+          Generate Summary
+        </button>
+      </div>
+
+      <div class="regenerate-panel" id="regeneratePanel" style="display: none;">
+        <button class="btn btn-primary btn-large" id="regenerateBtn" disabled>
+          Regenerate Summary (<span id="remainingBtnCount">3</span> left)
+        </button>
+      </div>
+
+      <div class="generating-panel" id="generatingPanel" style="display: none;">
+        <div class="spinner large"></div>
+        <p>Generating summary...</p>
+        <p class="hint">This may take a minute or two.</p>
+      </div>
+
+      <div class="summary-content" id="summaryContent">
+        <div class="empty-state">
+          <p>Click "Generate Summary" to create a structured summary of your meeting.</p>
+          <p>You can modify the summary up to 3 times using the text area above.</p>
+        </div>
+      </div>
+
+      <div class="token-cost-panel" id="tokenCostPanel" style="display: none;">
+        <h3>Token Usage & Cost</h3>
+        <div class="token-grid">
+          <div class="token-item">
+            <span class="token-label">Input Tokens</span>
+            <span class="token-value" id="inputTokens">—</span>
+          </div>
+          <div class="token-item">
+            <span class="token-label">Output Tokens</span>
+            <span class="token-value" id="outputTokens">—</span>
+          </div>
+          <div class="token-item">
+            <span class="token-label">Total Tokens</span>
+            <span class="token-value" id="totalTokens">—</span>
+          </div>
+          <div class="token-item">
+            <span class="token-label">Est. Cost</span>
+            <span class="token-value" id="estCost">—</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Powered by Qwen3-ASR + Qwen3.6 | Hosted on Render</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  
+  <script type="module">
+    import { createSummary, downloadSummary, getTranscript } from '/static/api/client.js';
+
+    const jobId = sessionStorage.getItem('jobId');
+
+    if (!jobId) {
+      window.location.href = '/pages/index.html';
+    }
+
+    let modificationCount = 0;
+    const MAX_MODIFICATIONS = 3;
+    let transcriptText = '';
+    let currentSummary = '';
+
+    const contextText = document.getElementById('contextText');
+    const generateBtn = document.getElementById('generateBtn');
+    const regenerateBtn = document.getElementById('regenerateBtn');
+    const generatePanel = document.getElementById('generatePanel');
+    const regeneratePanel = document.getElementById('regeneratePanel');
+    const generatingPanel = document.getElementById('generatingPanel');
+    const summaryContent = document.getElementById('summaryContent');
+    const tokenCostPanel = document.getElementById('tokenCostPanel');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const remainingCount = document.getElementById('remainingCount');
+    const remainingBtnCount = document.getElementById('remainingBtnCount');
+    const modificationHint = document.getElementById('modificationHint');
+
+    function updateModifications() {
+      const remaining = MAX_MODIFICATIONS - modificationCount;
+      remainingCount.textContent = remaining;
+      remainingBtnCount.textContent = remaining;
+      
+      if (remaining === 0) {
+        regenerateBtn.disabled = true;
+        contextText.disabled = true;
+        modificationHint.textContent = 'No modifications remaining';
+      } else if (modificationCount === 0) {
+        modificationHint.textContent = 'Enter instructions to modify the summary (optional)';
+      } else {
+        modificationHint.textContent = `${remaining} modifications remaining`;
+      }
+    }
+
+    async function loadTranscript() {
+      const cached = sessionStorage.getItem('transcriptData');
+      if (cached) {
+        const data = JSON.parse(cached);
+        transcriptText = data.sentences.map(s => {
+          const mins = Math.floor(s.begin_time_ms / 60000);
+          const secs = Math.floor((s.begin_time_ms % 60000) / 1000);
+          return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}] ${s.text}`;
+        }).join('\n');
+        return;
+      }
+
+      try {
+        const data = await getTranscript(jobId);
+        transcriptText = data.sentences.map(s => {
+          const mins = Math.floor(s.begin_time_ms / 60000);
+          const secs = Math.floor((s.begin_time_ms % 60000) / 1000);
+          return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}] ${s.text}`;
+        }).join('\n');
+        sessionStorage.setItem('transcriptData', JSON.stringify(data));
+      } catch (error) {
+        console.error('Failed to load transcript:', error);
+      }
+    }
+
+    async function generateSummary(context = '') {
+      if (modificationCount >= MAX_MODIFICATIONS) {
+        alert('Maximum modifications reached');
+        return;
+      }
+
+      if (!transcriptText) {
+        await loadTranscript();
+      }
+
+      generatePanel.style.display = 'none';
+      regeneratePanel.style.display = 'none';
+      generatingPanel.style.display = 'flex';
+      summaryContent.style.display = 'none';
+
+      try {
+        const data = await createSummary(jobId, context);
+        
+        currentSummary = data.summary_markdown;
+        summaryContent.innerHTML = marked.parse(currentSummary);
+        
+        document.getElementById('inputTokens').textContent = data.token_usage.summary_input_tokens?.toLocaleString() || '—';
+        document.getElementById('outputTokens').textContent = data.token_usage.summary_output_tokens?.toLocaleString() || '—';
+        document.getElementById('totalTokens').textContent = data.token_usage.summary_total_tokens?.toLocaleString() || '—';
+        document.getElementById('estCost').textContent = `$${data.cost_usd?.toFixed(4) || '—'} USD`;
+        
+        tokenCostPanel.style.display = 'block';
+        summaryContent.style.display = 'block';
+        generatingPanel.style.display = 'none';
+        
+        modificationCount++;
+        updateModifications();
+
+        if (modificationCount < MAX_MODIFICATIONS) {
+          regeneratePanel.style.display = 'block';
+        }
+      } catch (error) {
+        generatingPanel.style.display = 'none';
+        if (modificationCount === 0) {
+          generatePanel.style.display = 'block';
+        } else {
+          regeneratePanel.style.display = 'block';
+        }
+        summaryContent.innerHTML = `
+          <div class="error-state">
+            <p>Error generating summary: ${error.message}</p>
+            <button class="btn" onclick="location.reload()">Retry</button>
+          </div>
+        `;
+        summaryContent.style.display = 'block';
+      }
+    }
+
+    generateBtn.addEventListener('click', async () => {
+      const context = contextText.value.trim();
+      await generateSummary(context);
+    });
+
+    regenerateBtn.addEventListener('click', async () => {
+      const context = contextText.value.trim();
+      contextText.value = '';
+      await generateSummary(context);
+    });
+
+    downloadBtn.addEventListener('click', async () => {
+      if (!currentSummary) return;
+      try {
+        const blob = new Blob([currentSummary], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `meeting_summary_${new Date().toISOString().slice(0, 10)}.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        alert(`Download failed: ${error.message}`);
+      }
+    });
+
+    copyBtn.addEventListener('click', () => {
+      if (!currentSummary) return;
+      navigator.clipboard.writeText(currentSummary).then(() => {
+        alert('Markdown copied to clipboard!');
+      });
+    });
+
+    loadTranscript();
+  </script>
+</body>
+</html>
