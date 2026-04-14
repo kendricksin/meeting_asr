@@ -3,14 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MeetingMind — Upload Video</title>
+  <title>Meeting Summary Generator — Upload</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/main.css">
 </head>
 <body>
   <header>
-    <div class="container">
-      <h1>MeetingMind</h1>
-      <p class="tagline">Video Meeting Analyzer</p>
+    <div class="container header-flex">
+      <div>
+        <h1>Meeting Summary Generator</h1>
+        <p class="tagline">AI-powered meeting transcription & summarization</p>
+      </div>
+      <a href="/pages/index.html" class="btn btn-small">Home</a>
     </div>
   </header>
 
@@ -125,7 +131,9 @@
       }
 
       const validTypes = ['video/mp4', 'video/x-matroska', 'video/quicktime', 'video/webm'];
-      if (!validTypes.includes(file.type)) {
+      const validExts = ['.mp4', '.mkv', '.mov', '.webm'];
+      const ext = '.' + file.name.split('.').pop().toLowerCase();
+      if (!validTypes.includes(file.type) && !validExts.includes(ext)) {
         showError('Invalid file type. Please upload MP4, MKV, MOV, or WEBM.');
         return;
       }
@@ -142,6 +150,10 @@
         // Store job_id and redirect
         sessionStorage.setItem('jobId', data.job_id);
         sessionStorage.setItem('filename', data.filename);
+        sessionStorage.removeItem('transcriptData');
+        sessionStorage.removeItem('currentSummary');
+        sessionStorage.removeItem('modificationCount');
+        sessionStorage.removeItem('speakerPredictions');
         
         setTimeout(() => {
           window.location.href = '/pages/status.html';

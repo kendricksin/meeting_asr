@@ -3,6 +3,7 @@ import sys
 import time
 import uuid
 import json
+import base64
 import asyncio
 import struct
 from datetime import datetime
@@ -70,6 +71,8 @@ MAX_AUDIO_DURATION_SECONDS = config.MAX_AUDIO_DURATION_MINUTES * 60
 
 class SummaryRequest(BaseModel):
     context_text: Optional[str] = ""
+    transcript: Optional[dict] = None
+    speaker_count: Optional[int] = 3
 
 
 class Sentence(BaseModel):
@@ -295,7 +298,7 @@ def transcribe(job_id: str, file_url: str) -> tuple[List[dict], float]:
                     "begin_time_ms": begin,
                     "end_time_ms": end,
                     "text": sent.get("text", ""),
-                    "language": sent.get("language", "th"),
+                    "language": sent.get("language", ""),
                     "emotion": sent.get("emotion", "neutral"),
                     "duration_ms": end - begin,
                     "words": words,
@@ -351,7 +354,7 @@ def summarize(
 ## Decisions
 [Any decisions made]
 
-Be concise and professional. Use Thai language if the transcript is primarily Thai."""
+Be concise and professional. Use appropriate language if the transcript is in a different language or multiple language such as thai chinese or english."""
 
     response = client.chat.completions.create(
         model="qwen3.6-plus",
@@ -359,7 +362,7 @@ Be concise and professional. Use Thai language if the transcript is primarily Th
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
         ],
-        max_tokens=MAX_SUMMARY_TOKENS,
+        max_tokens=min(MAX_SUMMARY_TOKENS, 8000, 65536),
     )
 
     summary = response.choices[0].message.content
@@ -527,18 +530,108 @@ async def get_transcript(job_id: str):
     if job.status != "complete":
         raise HTTPException(400, "Transcription not ready")
 
+    from collections import Counter
+
     audio_duration = max(
         (job.sentences[-1].end_time_ms / 1000) if job.sentences else 0,
         sum(s.duration_ms for s in job.sentences) / 2000 if job.sentences else 0,
     )
 
+    lang_counter = Counter(s.language for s in job.sentences)
+    dominant_lang = lang_counter.most_common(1)[0][0] if lang_counter else "th"
+
     return {
         "job_id": job_id,
         "audio_duration_seconds": audio_duration,
-        "language": "th",
+        "language": dominant_lang,
         "sentences": [s.model_dump() for s in job.sentences],
         "token_usage": job.token_usage,
     }
+
+
+@app.post("/api/transcript/predict-speakers")
+@limiter.limit("5/minute")
+async def predict_speakers(request: Request, request_data: SummaryRequest = None):
+    if not request_data or not request_data.transcript:
+        raise HTTPException(400, "Transcript data required")
+
+    sentences = request_data.transcript.get("sentences", [])
+    if not sentences:
+        raise HTTPException(400, "No sentences in transcript")
+
+    speaker_count = request_data.speaker_count or 3
+
+    transcript_for_llm = "\n".join(
+        [
+            f"[{s['begin_time_ms'] // 60000:02d}:{(s['begin_time_ms'] % 60000) // 1000:02d}] {s['text']}"
+            for s in sentences
+        ]
+    )
+
+    try:
+        speakers = await predict_speakers_llm(
+            transcript_for_llm, len(sentences), speaker_count
+        )
+        return {"speakers": speakers}
+    except Exception as e:
+        raise HTTPException(500, sanitize_error(str(e)))
+
+
+async def predict_speakers_llm(
+    transcript_text: str, num_sentences: int, speaker_count: int = 3
+) -> list:
+    from openai import OpenAI
+
+    base_url = config.REGIONAL_URLS.get(
+        config.DASHSCOPE_REGION, config.REGIONAL_URLS["singapore"]
+    ).replace("/api/v1", "/compatible-mode/v1")
+
+    client = OpenAI(
+        api_key=config.DASHSCOPE_API_KEY,
+        base_url=base_url,
+    )
+
+    speaker_labels = ", ".join([f"Speaker {chr(65 + i)}" for i in range(speaker_count)])
+
+    system_prompt = f"""You are a meeting analyst. Analyze the transcript and assign speaker labels to each sentence.
+Group sentences by speaker based on:
+1. Time proximity (sentences close together are likely same speaker)
+2. Content context (who is addressing whom, names mentioned)
+3. Speaking patterns and language used
+
+If names are mentioned in the transcript (e.g., someone says "I'm John" or addresses someone), use those names as speaker labels.
+Otherwise, use labels like "Person A", "Person B", etc. up to {speaker_count} speakers.
+Keep speaker labels short (max 15 characters).
+
+Return ONLY a JSON array of speaker labels, one per sentence in order.
+Example output: ["John", "John", "Sarah", "John", "Mike"]
+
+Respond with ONLY the JSON array, no explanation."""
+
+    response = client.chat.completions.create(
+        model="qwen3.6-plus",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Transcript:\n{transcript_text[:8000]}"},
+        ],
+        max_tokens=min(1024, num_sentences * 20),
+    )
+
+    result_text = response.choices[0].message.content.strip()
+
+    import json
+    import re
+
+    json_match = re.search(r"\[.*\]", result_text, re.DOTALL)
+    if json_match:
+        try:
+            speakers = json.loads(json_match.group())
+            if isinstance(speakers, list) and len(speakers) == num_sentences:
+                return speakers
+        except:
+            pass
+
+    return [f"Person {chr(65 + (i % speaker_count))}" for i in range(num_sentences)]
 
 
 @app.post("/api/summary/{job_id}")
@@ -546,31 +639,44 @@ async def get_transcript(job_id: str):
 async def create_summary(
     request: Request, job_id: str, request_data: SummaryRequest = None
 ):
-    if job_id not in jobs:
-        raise HTTPException(404, "Job not found")
-    job = jobs[job_id]
+    transcript_text = None
+    job = None
 
-    if len(job.sentences) == 0:
-        raise HTTPException(400, "No transcript available")
+    if request_data and request_data.transcript:
+        sentences = request_data.transcript.get("sentences", [])
+        transcript_text = "\n".join(
+            [
+                f"[{s['begin_time_ms'] // 60000:02d}:{(s['begin_time_ms'] % 60000) // 1000:02d}] {s['text']}"
+                for s in sentences
+            ]
+        )
+    elif job_id in jobs:
+        job = jobs[job_id]
+        if len(job.sentences) == 0:
+            raise HTTPException(400, "No transcript available")
+        transcript_text = "\n".join(
+            [
+                f"[{s.begin_time_ms // 60000:02d}:{(s.begin_time_ms % 60000) // 1000:02d}] {s.text}"
+                for s in job.sentences
+            ]
+        )
+    else:
+        raise HTTPException(404, "Job not found and no transcript provided")
 
-    transcript_text = "\n".join(
-        [
-            f"[{s.begin_time_ms // 60000:02d}:{(s.begin_time_ms % 60000) // 1000:02d}] {s.text}"
-            for s in job.sentences
-        ]
-    )
-
-    job.status = "summarizing"
-    log_job(job_id, "Generating summary...")
+    if job:
+        job.status = "summarizing"
+        log_job(job_id, "Generating summary...")
 
     try:
         context_text = request_data.context_text if request_data else ""
         summary, token_usage, cost = summarize(transcript_text, context_text or "", [])
-        job.summary_markdown = summary
-        job.token_usage.update(token_usage)
-        job.cost_usd = cost
-        job.status = "complete"
-        log_job(job_id, f"Summary generated! Cost: ${cost:.4f}")
+
+        if job:
+            job.summary_markdown = summary
+            job.token_usage.update(token_usage)
+            job.cost_usd = cost
+            job.status = "complete"
+            log_job(job_id, f"Summary generated! Cost: ${cost:.4f}")
 
         return {
             "job_id": job_id,
@@ -579,9 +685,15 @@ async def create_summary(
             "cost_usd": cost,
         }
     except Exception as e:
-        job.status = "error"
-        job.error = sanitize_error(str(e))
-        raise HTTPException(500, sanitize_error(str(e)))
+        import traceback
+
+        error_detail = sanitize_error(str(e))
+        if job:
+            log_job(job_id, f"Summary error: {error_detail}")
+            log_job(job_id, f"Trace: {traceback.format_exc()}")
+            job.status = "error"
+            job.error = error_detail
+        raise HTTPException(500, error_detail)
 
 
 @app.get("/api/download/{job_id}")

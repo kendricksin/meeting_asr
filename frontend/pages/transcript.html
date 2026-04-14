@@ -3,25 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MeetingMind — Transcript</title>
+  <title>Meeting Summary Generator — Transcript</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/main.css">
   <style>
     @media print {
-      body { background: white; }
+      body { background: white; color: black; }
       .no-print { display: none !important; }
-      .transcript-section { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
-      .transcript-content {
-        max-height: none !important;
-        overflow: visible !important;
-        border: none !important;
-        background: white !important;
-        padding: 0 !important;
-      }
-      .sentence {
-        break-inside: avoid;
-        border-left: 3px solid !important;
-        margin-bottom: 0.5rem !important;
-      }
+      .transcript-section { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; background: white; }
+      .transcript-content { background: white; border-color: #ccc; max-height: none !important; overflow: visible !important; border: none !important; padding: 0 !important; }
+      .sentence { background: white !important; color: black !important; border-left: 3px solid !important; break-inside: avoid; margin-bottom: 0.5rem !important; }
       .speaker-select { display: none; }
       .speaker-legend { break-inside: avoid; }
     }
@@ -31,11 +24,12 @@
   <header>
     <div class="container header-flex">
       <div>
-        <h1>MeetingMind</h1>
-        <p class="tagline">Video Meeting Analyzer</p>
+        <h1>Meeting Summary Generator</h1>
+        <p class="tagline">AI-powered meeting transcription & summarization</p>
       </div>
-      <div class="job-info">
-        <span id="filename"></span>
+      <div class="header-right">
+        <span id="filename" class="job-info"></span>
+        <a href="/pages/index.html" class="btn btn-small">Home</a>
       </div>
     </div>
   </header>
@@ -53,11 +47,28 @@
 
       <div class="speaker-manager no-print">
         <h3>Speakers</h3>
-        <div class="speaker-list" id="speakerList"></div>
-        <div class="add-speaker-form">
-          <input type="text" id="newSpeakerName" placeholder="Name (≤10 chars)" maxlength="10">
-          <button class="btn btn-small" id="addSpeakerBtn">Add Speaker</button>
+        <div class="speaker-columns">
+          <div class="speaker-column">
+            <label class="column-label">Predict with AI</label>
+            <div class="predict-controls">
+              <input type="number" id="predictedSpeakerCount" min="2" max="10" value="3">
+              <button class="btn btn-small" id="predictSpeakersBtn">🎯 Predict</button>
+            </div>
+            <div class="predicting-state" id="predictingState" style="display:none;">
+              <div class="spinner"></div>
+              <span>Analyzing...</span>
+            </div>
+          </div>
+          <div class="speaker-column">
+            <label class="column-label">Add / Rename Manually</label>
+            <div class="speaker-list" id="speakerList"></div>
+            <div class="add-speaker-form">
+              <input type="text" id="newSpeakerName" placeholder="Enter name" maxlength="10">
+              <button class="btn btn-small" id="addSpeakerBtn">+ Add</button>
+            </div>
+          </div>
         </div>
+        <p class="hint-text">Click dropdown on each sentence to assign speaker</p>
       </div>
 
       <div class="speaker-legend" id="speakerLegend"></div>
@@ -85,7 +96,7 @@
   </footer>
 
   <script type="module">
-    import { getTranscript } from '/static/api/client.js';
+    import { getTranscript, predictSpeakers } from '/static/api/client.js';
 
     const jobId = sessionStorage.getItem('jobId');
     const filename = sessionStorage.getItem('filename');
@@ -173,7 +184,7 @@
         div.className = 'sentence';
         div.dataset.id = sentence.id;
         div.style.borderLeft = `4px solid ${speaker.color}`;
-        div.style.background = speaker.color + '18';
+        div.style.background = speaker.color + '25';
 
         div.innerHTML = `
           <span class="sentence-time">[${formatTime(sentence.begin_time_ms)}]</span>
@@ -218,14 +229,32 @@
 
     async function loadTranscript() {
       const cached = sessionStorage.getItem('transcriptData');
+      const cachedSpeakers = sessionStorage.getItem('speakerPredictions');
+      
       if (cached) {
         const data = JSON.parse(cached);
         transcriptData = data;
         sentences = data.sentences.map(s => ({ ...s, speakerId: 0 }));
-        if (speakers.length === 0) {
+        
+        if (cachedSpeakers) {
+          const speakerNames = JSON.parse(cachedSpeakers);
+          const uniqueNames = [...new Set(speakerNames)];
+          speakers = uniqueNames.map((name, i) => ({
+            id: i,
+            name: name.substring(0, 10),
+            color: SPEAKER_COLORS[i % SPEAKER_COLORS.length]
+          }));
+          speakerNames.forEach((name, idx) => {
+            const speakerIdx = speakers.findIndex(s => s.name === name);
+            if (speakerIdx !== -1) {
+              sentences[idx].speakerId = speakers[speakerIdx].id;
+            }
+          });
+        } else if (speakers.length === 0) {
           addSpeaker('Speaker A');
           addSpeaker('Speaker B');
         }
+        
         tokenCount.textContent = data.token_usage?.transcription_proxy_tokens?.toLocaleString() || '—';
         renderSpeakers();
         return;
@@ -254,6 +283,51 @@
         `;
       }
     }
+
+    async function handlePredictSpeakers() {
+      if (!transcriptData) {
+        alert('No transcript loaded');
+        return;
+      }
+      
+      const predictBtn = document.getElementById('predictSpeakersBtn');
+      const predictingState = document.getElementById('predictingState');
+      const speakerCount = parseInt(document.getElementById('predictedSpeakerCount').value) || 3;
+      
+      predictBtn.disabled = true;
+      predictingState.style.display = 'flex';
+      
+      try {
+        const result = await predictSpeakers(transcriptData, speakerCount);
+        const speakerNames = result.speakers;
+        
+        sessionStorage.setItem('speakerPredictions', JSON.stringify(speakerNames));
+        
+        speakers = [];
+        const uniqueNames = [...new Set(speakerNames)];
+        uniqueNames.slice(0, speakerCount).forEach((name, i) => {
+          speakers.push({
+            id: i,
+            name: name.substring(0, 10),
+            color: SPEAKER_COLORS[i % SPEAKER_COLORS.length]
+          });
+        });
+        
+        sentences = sentences.map((s, idx) => ({
+          ...s,
+          speakerId: Math.min(speakerNames[idx] ? speakers.findIndex(sp => sp.name === speakerNames[idx]) : 0, speakers.length - 1)
+        }));
+        
+        renderSpeakers();
+      } catch (error) {
+        alert('Speaker prediction failed: ' + error.message);
+      } finally {
+        predictBtn.disabled = false;
+        predictingState.style.display = 'none';
+      }
+    }
+
+    document.getElementById('predictSpeakersBtn').addEventListener('click', handlePredictSpeakers);
 
     speakerList.addEventListener('input', (e) => {
       if (e.target.classList.contains('speaker-name-input')) {

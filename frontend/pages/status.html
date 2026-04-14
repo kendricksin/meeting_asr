@@ -3,25 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MeetingMind — Transcription</title>
+  <title>Meeting Summary Generator — Processing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/main.css">
 </head>
 <body>
   <header>
     <div class="container header-flex">
       <div>
-        <h1>MeetingMind</h1>
-        <p class="tagline">Video Meeting Analyzer</p>
+        <h1>Meeting Summary Generator</h1>
+        <p class="tagline">AI-powered meeting transcription & summarization</p>
       </div>
-      <div class="job-info">
-        <span id="filename"></span>
+      <div class="header-right">
+        <span id="filename" class="job-info"></span>
+        <a href="/pages/index.html" class="btn btn-small">Home</a>
       </div>
     </div>
   </header>
 
   <main class="container">
     <section class="status-section">
-      <h2 id="statusTitle">Transcribing...</h2>
+      <h2 id="statusTitle">Processing your meeting</h2>
       
       <div class="step-indicator">
         <div class="step" id="step1">
@@ -46,23 +50,21 @@
       </div>
 
       <div class="status-card" id="statusCard">
-        <div class="status-icon">
-          <div class="spinner large"></div>
+        <div class="spinner large"></div>
+        
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+          </div>
+          <div class="progress-label" id="progressLabel">Starting...</div>
         </div>
+        
         <p class="status-message" id="statusMessage">Processing your video...</p>
-        <p class="status-detail" id="statusDetail">This may take several minutes for long recordings.</p>
-      </div>
-
-      <div class="log-console">
-        <div class="log-header">
-          <span>Live Log</span>
-          <button class="btn-small" id="toggleLog">Toggle</button>
+        <p class="status-detail" id="statusDetail">This usually takes 2-5 minutes depending on video length.</p>
+        
+        <div class="action-buttons">
+          <button class="btn btn-secondary" id="cancelBtn">Cancel</button>
         </div>
-        <div class="log-content" id="logContent"></div>
-      </div>
-
-      <div class="action-buttons">
-        <button class="btn btn-secondary" id="cancelBtn">Cancel</button>
       </div>
     </section>
   </main>
@@ -78,19 +80,23 @@
     const filename = sessionStorage.getItem('filename');
 
     if (!jobId) {
-window.location.href = '/pages/index.html';
+      window.location.href = '/pages/index.html';
     }
 
     document.getElementById('filename').textContent = filename || '';
 
+    const progressFill = document.getElementById('progressFill');
+    const progressLabel = document.getElementById('progressLabel');
     const statusMessage = document.getElementById('statusMessage');
     const statusDetail = document.getElementById('statusDetail');
-    const logContent = document.getElementById('logContent');
     const cancelBtn = document.getElementById('cancelBtn');
-    const toggleLogBtn = document.getElementById('toggleLog');
 
     let pollingInterval = null;
-    let currentStep = 2;
+    let startTime = Date.now();
+    let isComplete = false;
+    
+    const MAX_TIME_MS = 5 * 60 * 1000;
+    const STUCK_AT_PERCENT = 96;
 
     function updateStep(step) {
       const steps = ['step1', 'step2', 'step3', 'step4'];
@@ -103,51 +109,63 @@ window.location.href = '/pages/index.html';
           el.classList.add('active');
         }
       });
-      currentStep = step;
     }
 
-    function addLog(message) {
-      const entry = document.createElement('div');
-      entry.className = 'log-entry';
-      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-      logContent.appendChild(entry);
-      logContent.scrollTop = logContent.scrollHeight;
+    function updateProgress(elapsedMs, isDone = false) {
+      if (isDone) {
+        progressFill.style.width = '100%';
+        progressLabel.textContent = 'Complete!';
+        return;
+      }
+      
+      const elapsedSec = elapsedMs / 1000;
+      const estimatedSec = 300;
+      let percent = Math.min(Math.floor((elapsedSec / estimatedSec) * 100), STUCK_AT_PERCENT);
+      
+      progressFill.style.width = percent + '%';
+      progressLabel.textContent = `${percent}% complete`;
     }
 
     async function pollStatus() {
+      if (isComplete) return;
+      
+      const elapsedMs = Date.now() - startTime;
+      
       try {
         const data = await getStatus(jobId);
-        
-        // Add new logs
-        if (data.log && data.log.length > 0) {
-          data.log.forEach(msg => addLog(msg));
-        }
 
         if (data.status === 'transcribing') {
-          statusMessage.textContent = 'Transcribing audio...';
-          statusDetail.textContent = 'Qwen3-ASR is processing your recording.';
           updateStep(2);
+          statusMessage.textContent = 'Transcribing audio...';
+          statusDetail.textContent = 'Qwen3-ASR is converting speech to text.';
+          updateProgress(elapsedMs);
         } else if (data.status === 'complete') {
-          statusDetail.textContent = 'Transcription complete!';
+          isComplete = true;
           updateStep(3);
+          statusMessage.textContent = 'Transcription complete!';
+          statusDetail.textContent = 'Loading transcript...';
+          updateProgress(elapsedMs, true);
           clearInterval(pollingInterval);
-          
-          // Redirect to transcript page
           setTimeout(() => {
             window.location.href = '/pages/transcript.html';
-          }, 1000);
+          }, 800);
         } else if (data.status === 'error') {
           statusMessage.textContent = 'Error occurred';
           statusDetail.textContent = data.error_message || 'Unknown error';
-          statusDetail.style.color = '#EF4444';
+          statusDetail.style.color = 'var(--danger)';
           clearInterval(pollingInterval);
         } else if (data.status === 'queued') {
+          updateStep(1);
           statusMessage.textContent = 'Waiting in queue...';
           statusDetail.textContent = 'Your video is being prepared.';
-          updateStep(1);
+          updateProgress(0);
         }
       } catch (error) {
-        addLog(`Error: ${error.message}`);
+        statusDetail.textContent = 'Connection error. Retrying...';
+      }
+      
+      if (!isComplete) {
+        updateProgress(elapsedMs);
       }
     }
 
@@ -157,20 +175,17 @@ window.location.href = '/pages/index.html';
           await deleteJob(jobId);
           sessionStorage.removeItem('jobId');
           sessionStorage.removeItem('filename');
-window.location.href = '/pages/index.html';
+          sessionStorage.removeItem('transcriptData');
+          window.location.href = '/pages/index.html';
         } catch (error) {
-          addLog(`Cancel error: ${error.message}`);
+          statusDetail.textContent = 'Failed to cancel job.';
         }
       }
     });
 
-    toggleLogBtn.addEventListener('click', () => {
-      logContent.style.display = logContent.style.display === 'none' ? 'block' : 'none';
-    });
-
-    // Start polling
+    updateProgress(0);
     pollStatus();
-    pollingInterval = setInterval(pollStatus, 3000);
+    pollingInterval = setInterval(pollStatus, 2000);
   </script>
 </body>
 </html>

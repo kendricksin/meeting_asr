@@ -3,18 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MeetingMind — Summary</title>
+  <title>Meeting Summary Generator — Summary</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/main.css">
 </head>
 <body>
   <header>
     <div class="container header-flex">
       <div>
-        <h1>MeetingMind</h1>
-        <p class="tagline">Video Meeting Analyzer</p>
+        <h1>Meeting Summary Generator</h1>
+        <p class="tagline">AI-powered meeting transcription & summarization</p>
       </div>
-      <div class="job-info">
-        <a href="/pages/transcript.html" class="btn btn-small">← Back to Transcript</a>
+      <div class="header-right">
+        <a href="/pages/transcript.html" class="btn btn-small">← Transcript</a>
+        <a href="/pages/index.html" class="btn btn-small">Home</a>
       </div>
     </div>
   </header>
@@ -102,10 +106,10 @@
       window.location.href = '/pages/index.html';
     }
 
-    let modificationCount = 0;
+    let modificationCount = parseInt(sessionStorage.getItem('modificationCount') || '0');
     const MAX_MODIFICATIONS = 3;
     let transcriptText = '';
-    let currentSummary = '';
+    let currentSummary = sessionStorage.getItem('currentSummary') || '';
 
     const contextText = document.getElementById('contextText');
     const generateBtn = document.getElementById('generateBtn');
@@ -130,10 +134,14 @@
         regenerateBtn.disabled = true;
         contextText.disabled = true;
         modificationHint.textContent = 'No modifications remaining';
-      } else if (modificationCount === 0) {
-        modificationHint.textContent = 'Enter instructions to modify the summary (optional)';
       } else {
-        modificationHint.textContent = `${remaining} modifications remaining`;
+        regenerateBtn.disabled = false;
+        contextText.disabled = false;
+        if (modificationCount === 0) {
+          modificationHint.textContent = 'Enter instructions to modify the summary (optional)';
+        } else {
+          modificationHint.textContent = `${remaining} modifications remaining`;
+        }
       }
     }
 
@@ -178,9 +186,12 @@
       summaryContent.style.display = 'none';
 
       try {
-        const data = await createSummary(jobId, context);
+        const cached = sessionStorage.getItem('transcriptData');
+        const transcriptData = cached ? JSON.parse(cached) : null;
+        const data = await createSummary(jobId, transcriptData, context);
         
         currentSummary = data.summary_markdown;
+        sessionStorage.setItem('currentSummary', currentSummary);
         summaryContent.innerHTML = marked.parse(currentSummary);
         
         document.getElementById('inputTokens').textContent = data.token_usage.summary_input_tokens?.toLocaleString() || '—';
@@ -193,6 +204,7 @@
         generatingPanel.style.display = 'none';
         
         modificationCount++;
+        sessionStorage.setItem('modificationCount', modificationCount);
         updateModifications();
 
         if (modificationCount < MAX_MODIFICATIONS) {
@@ -249,6 +261,17 @@
     });
 
     loadTranscript();
+    
+    if (currentSummary) {
+      summaryContent.innerHTML = marked.parse(currentSummary);
+      summaryContent.style.display = 'block';
+      tokenCostPanel.style.display = 'block';
+      generatePanel.style.display = 'none';
+      if (modificationCount < MAX_MODIFICATIONS) {
+        regeneratePanel.style.display = 'block';
+      }
+      updateModifications();
+    }
   </script>
 </body>
 </html>

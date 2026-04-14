@@ -36,17 +36,43 @@ export async function getTranscript(jobId) {
   return response.json();
 }
 
-export async function createSummary(jobId, contextText = '') {
-  const response = await fetch(`${API_BASE}/summary/${jobId}`, {
+export async function createSummary(jobId, transcriptData = null, contextText = '') {
+  let url = `${API_BASE}/summary/${jobId}`;
+  let body = { context_text: contextText };
+  
+  if (transcriptData) {
+    body = {
+      context_text: contextText,
+      transcript: transcriptData
+    };
+  }
+  
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ context_text: contextText }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     throw new Error(`Summary failed: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+export async function predictSpeakers(transcriptData, speakerCount = 3) {
+  const response = await fetch(`${API_BASE}/transcript/predict-speakers`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ transcript: transcriptData, speaker_count: speakerCount }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Speaker prediction failed: ${response.statusText}`);
   }
 
   return response.json();
