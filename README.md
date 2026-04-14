@@ -1,25 +1,17 @@
-# MeetingMind — Video Meeting Analyzer
+# Meeting Summary Generator
 
-A multi-page web tool that transcribes video meetings using Qwen3 ASR and generates structured summaries with Qwen3.6 Multimodal.
+AI-powered meeting transcription and summarization using Qwen3 ASR.
 
 ## Features
 
 - Upload video (MP4, MKV, MOV, WEBM) or audio (MP3) files
-- Automatic audio extraction and transcription
-- Maximum 120 minutes audio duration
-- Interactive transcript with timestamps, language badges, and emotion tags
-- Speaker clustering (auto-inferred, clearly labeled)
+- Automatic audio extraction and transcription (up to 120 minutes)
+- Interactive transcript with timestamps, language detection, and emotion tags
+- Speaker prediction with configurable count (2-10 speakers)
+- AI infers speaker names from conversation context
 - Summary generation with up to 3 modifications
 - Token usage tracking and cost estimation
-- Downloadable Markdown summaries and transcript JSON
-
-## Security & Rate Limits
-
-- **Rate limiting**: 10 uploads/minute, 5 summaries/minute per IP
-- **File validation**: Magic bytes verification to prevent extension spoofing
-- **IP tracking**: All jobs track uploader IP address
-- **Cost caps**: Summary tokens capped at 8000
-- **Auto cleanup**: Jobs expire after 1 hour
+- Dark theme UI with Inter font
 
 ## Tech Stack
 
@@ -60,7 +52,7 @@ meeting_asr/
 - Alibaba Cloud account with DashScope API key
 - Alibaba Cloud OSS bucket
 
-## Installation
+## Local Development
 
 1. Clone the repository:
 ```bash
@@ -88,61 +80,83 @@ OSS_BUCKET_NAME=your_bucket_name
 OSS_ENDPOINT=https://oss-ap-southeast-1.aliyuncs.com
 ```
 
-## Running Locally
-
-Start the server:
+5. Start the server:
 ```bash
 uv run uvicorn backend.main:app --reload --port 8000
 ```
 
-Open http://localhost:8000 in your browser.
+6. Open http://localhost:8000 in your browser.
 
-**App Flow:**
-1. Upload a video or audio file on the home page
-2. Wait for transcription (progress shown on status page)
-3. View transcript with speaker clustering
-4. Generate summary with optional context (up to 3 modifications)
+## Deploy to Render
 
-## Deployment on Render
+### Option 1: Using render.yaml (Recommended)
 
-1. Create a new Web Service on [Render](https://render.com)
+The `render.yaml` file automates the deployment. Connect your GitHub repo to Render and it will use this configuration automatically.
+
+### Option 2: Manual Setup
+
+1. Create a new **Web Service** on [Render](https://render.com)
+
 2. Connect your GitHub repository
-3. Use the `render.yaml` configuration (or set up manually):
-   - Build Command: `pip install -r backend/requirements.txt`
-   - Start Command: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-4. Add environment variables from `.env.example`
-5. Enable a 1GB disk for temporary file storage
+
+3. Configure the service:
+   - **Root Directory**: (leave empty or set to `/`)
+   - **Build Command**: `pip install -r backend/requirements.txt`
+   - **Start Command**: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+
+4. Add environment variables (Environment → Variables):
+   ```
+   DASHSCOPE_API_KEY=your_dashscope_api_key
+   DASHSCOPE_REGION=singapore
+   OSS_ACCESS_KEY_ID=your_oss_access_key
+   OSS_ACCESS_KEY_SECRET=your_oss_secret
+   OSS_BUCKET_NAME=your_bucket_name
+   OSS_ENDPOINT=your_oss_endpoint
+   ```
+
+5. Add a **Disk** (Environment → Disks):
+   - Name: `temp-storage`
+   - Size: `1GB`
+   - Mount Path: `/tmp/meetingmind`
+
+6. Deploy the service
+
+### Post-Deployment
+
+- The app will be available at `https://your-service-name.onrender.com`
+- Jobs expire after 1 hour of inactivity
+- Rate limits: 2 uploads/minute, 2 summaries/minute per IP
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DASHSCOPE_API_KEY` | Yes | — | Alibaba DashScope API key |
+| `DASHSCOPE_REGION` | No | `singapore` | Region: `singapore`, `beijing`, or `us` |
+| `OSS_ACCESS_KEY_ID` | Yes | — | Alibaba Cloud OSS access key |
+| `OSS_ACCESS_KEY_SECRET` | Yes | — | Alibaba Cloud OSS secret |
+| `OSS_BUCKET_NAME` | Yes | — | OSS bucket name |
+| `OSS_ENDPOINT` | Yes | — | OSS endpoint URL |
+| `MAX_FILE_SIZE_MB` | No | `500` | Max upload size (MB) |
+| `JOB_TTL_SECONDS` | No | `3600` | Job data TTL before cleanup |
+| `TOKEN_PRICE_PER_1K` | No | `0.0002` | Estimated cost per 1K tokens |
 
 ## API Endpoints
 
 | Method | Endpoint | Rate Limit | Description |
 |--------|----------|-----------|-------------|
-| POST | `/api/upload` | 10/min | Upload video/audio file |
-| GET | `/api/status/{job_id}` | — | Get job status and logs |
+| POST | `/api/upload` | 2/min | Upload video/audio file |
+| GET | `/api/status/{job_id}` | — | Get job status and progress |
 | GET | `/api/transcript/{job_id}` | — | Get transcription results |
-| POST | `/api/summary/{job_id}` | 5/min | Generate summary |
+| POST | `/api/transcript/predict-speakers` | — | Predict speakers using AI |
+| POST | `/api/summary/{job_id}` | 2/min | Generate summary |
 | GET | `/api/download/{job_id}` | — | Download summary as Markdown |
 | DELETE | `/api/job/{job_id}` | — | Delete job and cleanup files |
 | GET | `/api/health` | — | Health check |
 
-## Environment Variables
+## App Flow
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DASHSCOPE_API_KEY` | required | Alibaba DashScope API key |
-| `DASHSCOPE_REGION` | `singapore` | Region: `singapore`, `beijing`, or `us` |
-| `OSS_ACCESS_KEY_ID` | required | Alibaba Cloud OSS access key |
-| `OSS_ACCESS_KEY_SECRET` | required | Alibaba Cloud OSS secret |
-| `OSS_BUCKET_NAME` | required | OSS bucket name |
-| `OSS_ENDPOINT` | required | OSS endpoint URL |
-| `MAX_FILE_SIZE_MB` | `500` | Max upload size |
-| `JOB_TTL_SECONDS` | `3600` | Job data TTL before cleanup |
-| `POLL_INTERVAL_SECONDS` | `15` | ASR task poll interval |
-| `TOKEN_PRICE_PER_1K` | `0.0002` | Estimated cost per 1K tokens |
-
-## Pages
-
-1. **Upload** (`/`) - Drag & drop video (MP4, MKV, MOV, WEBM) or audio (MP3)
-2. **Status** (`/pages/status.html`) - View transcription progress with live logs
-3. **Transcript** (`/pages/transcript.html`) - Interactive transcript with search, speaker clusters, download JSON
-4. **Summary** (`/pages/summary.html`) - Generate summary with up to 3 modifications, download MD
+1. **Upload** — Drag & drop video (MP4, MKV, MOV, WEBM) or audio (MP3)
+2. **Status** — View transcription progress with loading bar (0-96% over 5 min)
+3. **Transcript** — View/edit speakers, search transcript, assign speakers to sentences
+4. **Summary** — Generate summary with optional context, download as Markdown

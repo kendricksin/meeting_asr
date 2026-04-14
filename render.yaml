@@ -2,13 +2,17 @@ services:
   - type: web
     name: meetingmind
     env: python
+    region: singapore
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    startCommand: mkdir -p /tmp/meetingmind && uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     plan: starter
     disk:
       name: temp-storage
       sizeGb: 1
+      mountPath: /tmp/meetingmind
     envVars:
+      - key: PYTHONPATH
+        value: .
       - key: DASHSCOPE_API_KEY
         sync: false
       - key: DASHSCOPE_REGION
@@ -21,3 +25,13 @@ services:
         sync: false
       - key: OSS_ENDPOINT
         sync: false
+      - key: TEMP_DIR
+        value: /tmp/meetingmind
+      - key: MAX_SUMMARY_TOKENS
+        value: 8000
+      - key: JOB_TTL_SECONDS
+        value: 3600
+      - key: RATE_LIMIT_UPLOADS_PER_MINUTE
+        value: 2
+      - key: RATE_LIMIT_SUMMARIES_PER_MINUTE
+        value: 2
