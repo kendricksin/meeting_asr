@@ -249,7 +249,7 @@ def transcribe(job_id: str, file_url: str) -> tuple[List[dict], float]:
     task_response = QwenTranscription.async_call(
         model="qwen3-asr-flash-filetrans",
         file_url=file_url,
-        language="auto",
+
         enable_itn=True,
         enable_words=True,
         enable_disfluencies=False,
